@@ -15,6 +15,8 @@ const dom = {
   dateEnd: document.getElementById('dateEnd'),
   regexFilter: document.getElementById('regexFilter'),
   duplicateFilter: document.getElementById('duplicateFilter'),
+  importButton: document.getElementById('importButton'),
+  importInput: document.getElementById('popupImportInput'),
   exportButton: document.getElementById('exportButton'),
   refreshButton: document.getElementById('refreshButton'),
   tableBody: document.getElementById('recordsBody'),
@@ -227,6 +229,38 @@ function escapeHtml(str) {
   }[ch] || ch));
 }
 
+async function importFromExcel(file) {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      throw new Error('Excel 文件不包含可用数据');
+    }
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const response = await chrome.runtime.sendMessage({ type: 'IMPORT_RECORDS', records: rows });
+    if (!response?.ok) {
+      throw new Error(response?.error || '导入失败');
+    }
+    await loadRecords();
+    const added = Number(response.added) || 0;
+    const updated = Number(response.updated) || 0;
+    if (added > 0 && updated > 0) {
+      alert(`导入完成，新增 ${added} 条并更新 ${updated} 条记录`);
+    } else if (added > 0) {
+      alert(`导入完成，新增 ${added} 条记录`);
+    } else if (updated > 0) {
+      alert(`导入完成，更新 ${updated} 条记录`);
+    } else {
+      alert('导入完成，没有新的记录');
+    }
+  } catch (error) {
+    console.error('导入失败', error);
+    alert(`导入失败：${error.message}`);
+  }
+}
+
 function handleSort(event) {
   const th = event.target.closest('th');
   if (!th) return;
@@ -275,6 +309,17 @@ function addEventListeners() {
   dom.regexFilter.addEventListener('change', applyFilters);
   dom.duplicateFilter.addEventListener('change', applyFilters);
   dom.table.querySelector('thead').addEventListener('click', handleSort);
+  dom.importButton.addEventListener('click', () => {
+    dom.importInput.value = '';
+    dom.importInput.click();
+  });
+  dom.importInput.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      await importFromExcel(file);
+    }
+    dom.importInput.value = '';
+  });
   dom.exportButton.addEventListener('click', exportToExcel);
   dom.refreshButton.addEventListener('click', () => {
     loadRecords();

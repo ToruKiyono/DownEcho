@@ -5,10 +5,11 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 ## 功能亮点
 * 📥 实时监听下载任务，持久化存储文件名、大小、时间与来源。
 * 🔁 多维度去重：按文件名、文件大小容差及命中过滤规则的相似名称均会提示，并记录详细原因。
-* 🔍 弹出页提供搜索、过滤、排序及快速导出能力，可按偏好开关正则高亮与重复标识。
+* 🔍 弹出页提供搜索、过滤、排序、导出及“一键导入 Excel”的入口，可按偏好开关正则高亮与重复标识。
 * ⚙️ 设置页可管理正则规则、主题、通知开关、自动清理等高级选项，并提供醒目的“导入 Excel”按钮与导入结果提醒。
 * 📊 使用内置的轻量版 SheetJS 兼容层（`xlsx.min.js`）完成 Excel 导入与导出，导入时自动去重、更新并汇报新增及变更条目。
 * 🗂️ 文件名统一规范：自动提取文件基名，移除系统下载目录前缀并解码 `%` 转义字符，确保历史导入与实时监听的记录格式一致。
+* 🔔 通知系统自动回退到内置矢量图标，避免因缺失图像导致的“Unable to download all specified images”错误。
 
 ## 安装与使用
 1. 在 Chrome 地址栏输入 `chrome://extensions/`，打开开发者模式。
@@ -43,10 +44,13 @@ graph LR
   C -->|通知/暂停/取消| E[Chrome Notifications API]
   C -->|消息| F[popup.js]
   C -->|消息| G[options.js]
-  F -->|展示记录/导出| H[popup.html]
+  F -->|导入/导出/展示| H[popup.html]
+  F -->|导入请求| C
   G -->|导入导出/设置| I[options.html]
   H -->|使用| A
   I -->|使用| A
+  F -->|调用| X[xlsx.min.js]
+  G -->|调用| X
 ```
 
 ### 数据流图
@@ -59,9 +63,10 @@ graph TD
   background -->|去重反馈/导入结果通知| Notification[chrome.notifications]
   Storage --> popupView[popup.js]
   Storage --> optionsView[options.js]
+  popupView -->|导入 Excel（新增/更新）| background
   optionsView -->|导入 Excel（新增/更新）| background
-  popupView -->|导出 Excel| XLSX[xlsx.min.js]
-  optionsView -->|导出 Excel| XLSX
+  popupView -->|导入/导出 Excel| XLSX[xlsx.min.js]
+  optionsView -->|导入/导出 Excel| XLSX
   XLSX -->|生成文件| User[用户]
 ```
 
@@ -83,7 +88,8 @@ sequenceDiagram
   BG->>DL: pause/resume/cancel
   BG->>chrome.notifications: create/clear
   POP->>BG: GET_RECORDS/GET_SETTINGS
-  POP->>XLSX: json_to_sheet, writeFile
+  POP->>BG: IMPORT_RECORDS(弹出页导入)
+  POP->>XLSX: read, json_to_sheet, writeFile
   OPT->>BG: SAVE_SETTINGS/IMPORT_RECORDS(合并新增/更新)/CLEAR_RECORDS
   OPT->>XLSX: read, json_to_sheet, writeFile
   BG->>ST: setSettings
@@ -99,6 +105,7 @@ graph TD
   U --> P1[打开弹出页查看记录]
   P1 --> P2[搜索/筛选/排序]
   P1 --> P3[导出记录为 Excel]
+  P1 --> P4[直接导入 Excel 并合并历史记录]
   U --> O1[打开设置页]
   O1 --> O2[管理正则规则/开关]
   O1 --> O3[导入历史 Excel（自动规范文件名并合并）]
@@ -107,7 +114,7 @@ graph TD
 
 ## Excel 导入刷新指南
 1. 在弹出页或设置页导出当前下载记录，按需在 Excel 中新增或调整文件条目。
-2. 打开设置页，点击“导入 Excel”按钮并选择修改后的 Excel 文件。
+2. 在弹出页点击“导入 Excel”按钮，或打开设置页使用同名按钮并选择修改后的 Excel 文件。
 3. 扩展会自动解析文件名、解码 `%20` 等 URL 转义符，并与现有记录比对：
    * 若发现同名记录，则更新其大小、时间、来源与状态字段，即使命中了正则过滤规则也会同步刷新。
    * 若文件名不存在，则追加为新记录。

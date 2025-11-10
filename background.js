@@ -16,6 +16,35 @@ const STORAGE_KEYS = {
 
 const pendingDecisions = new Map();
 
+const FALLBACK_ICON_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/Pm7kWQAAAABJRU5ErkJggg==';
+
+function resolveNotificationIcon() {
+  try {
+    return chrome.runtime.getURL('icons/icon128.png');
+  } catch (error) {
+    console.warn('Failed to resolve notification icon URL', error);
+    return FALLBACK_ICON_DATA_URL;
+  }
+}
+
+async function safeCreateNotification(notificationId, options) {
+  try {
+    await chrome.notifications.create(notificationId, options);
+  } catch (error) {
+    if (error && typeof error.message === 'string' && error.message.includes('Unable to download all specified images')) {
+      const fallbackOptions = { ...options, iconUrl: FALLBACK_ICON_DATA_URL };
+      try {
+        await chrome.notifications.create(notificationId, fallbackOptions);
+        return;
+      } catch (innerError) {
+        console.error('Fallback notification creation failed', innerError);
+      }
+    }
+    console.error('Notification creation failed', error);
+    throw error;
+  }
+}
+
 function sanitize(text) {
   if (!text) return '';
   return String(text).replace(/[\u0000-\u001f\u007f]/g, '').trim();
@@ -203,14 +232,16 @@ async function sendDecisionNotification({
     ? '命中下载过滤规则'
     : '检测到可能的重复下载';
   const context = matchedRegex ? `规则：${matchedRegex}` : '';
-  await chrome.notifications.create(notificationId, {
+  const iconUrl = resolveNotificationIcon();
+  const options = {
     type: 'basic',
-    iconUrl: 'icons/icon128.png',
+    iconUrl,
     title,
     message,
     contextMessage: context,
     buttons
-  });
+  };
+  await safeCreateNotification(notificationId, options);
   pendingDecisions.set(notificationId, {
     downloadId: download.id,
     reason,
@@ -222,12 +253,14 @@ async function sendDecisionNotification({
 async function showSimpleNotification(settings, title, message) {
   if (!settings.notificationsEnabled) return null;
   const notificationId = createInfoNotificationId();
-  await chrome.notifications.create(notificationId, {
+  const iconUrl = resolveNotificationIcon();
+  const options = {
     type: 'basic',
-    iconUrl: 'icons/icon128.png',
+    iconUrl,
     title,
     message
-  });
+  };
+  await safeCreateNotification(notificationId, options);
   return notificationId;
 }
 

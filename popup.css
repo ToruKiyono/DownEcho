@@ -47,6 +47,7 @@ body.theme-rose {
 .popup__actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -69,6 +70,21 @@ body.theme-rose {
 .btn--primary {
   background: #3c8dff;
   color: #fff;
+}
+
+.btn--secondary {
+  background: linear-gradient(135deg, #7bcfff, #3c8dff);
+  color: #0a3d62;
+}
+
+body.theme-forest .btn--secondary {
+  background: linear-gradient(135deg, #7fe6b0, #28b463);
+  color: #145a32;
+}
+
+body.theme-rose .btn--secondary {
+  background: linear-gradient(135deg, #ff9fcb, #ff6f91);
+  color: #7a1f4b;
 }
 
 body.theme-forest .btn--primary {
