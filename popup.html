@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DownEcho 下载记录</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup" id="popupRoot">
+    <header class="popup__header">
+      <h1 class="popup__title">DownEcho 下载记录</h1>
+      <div class="popup__actions">
+        <button id="exportButton" class="btn btn--primary">导出 Excel</button>
+        <button id="refreshButton" class="btn">刷新</button>
+      </div>
+    </header>
+
+    <section class="filters">
+      <div class="filter-group">
+        <label for="searchInput">搜索</label>
+        <input type="text" id="searchInput" placeholder="文件名或来源 URL" />
+      </div>
+      <div class="filter-group">
+        <label>文件大小 (KB)</label>
+        <div class="filter-inline">
+          <input type="number" id="sizeMin" placeholder="最小" min="0" />
+          <span>—</span>
+          <input type="number" id="sizeMax" placeholder="最大" min="0" />
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>下载时间</label>
+        <div class="filter-inline">
+          <input type="date" id="dateStart" />
+          <span>—</span>
+          <input type="date" id="dateEnd" />
+        </div>
+      </div>
+      <div class="filter-group">
+        <label for="regexFilter">正则匹配</label>
+        <select id="regexFilter">
+          <option value="all">全部</option>
+          <option value="matched">命中过滤规则</option>
+          <option value="unmatched">未命中过滤规则</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="duplicateFilter">重复状态</label>
+        <select id="duplicateFilter">
+          <option value="all">全部</option>
+          <option value="duplicates">标记为重复</option>
+          <option value="unique">未重复</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="legend">
+      <span class="legend__item"><span class="legend__icon legend__icon--regex" aria-hidden="true">★</span>命中过滤规则</span>
+      <span class="legend__item"><span class="legend__icon legend__icon--duplicate" aria-hidden="true">!</span>重复提示</span>
+    </section>
+
+    <section class="table-wrapper">
+      <table class="records-table" id="recordsTable">
+        <thead>
+          <tr>
+            <th data-sort="fileName">文件名</th>
+            <th data-sort="fileSize">大小</th>
+            <th data-sort="downloadTime">下载时间</th>
+            <th data-sort="sourceUrl">来源</th>
+            <th data-sort="status">状态</th>
+          </tr>
+        </thead>
+        <tbody id="recordsBody">
+          <tr class="placeholder">
+            <td colspan="5">暂无记录</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+  <script src="xlsx.min.js"></script>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
