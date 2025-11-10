@@ -200,13 +200,17 @@ body.theme-rose .btn--primary {
 }
 
 .source-link {
-  display: inline-block;
+  display: -webkit-box;
   max-width: 100%;
   color: inherit;
   text-decoration: underline;
   word-break: break-all;
   overflow-wrap: anywhere;
   line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  max-height: calc(1.4em * 3);
+  overflow: hidden;
 }
 
 .source-link:hover,
