@@ -16,8 +16,32 @@ const STORAGE_KEYS = {
 
 const pendingDecisions = new Map();
 
+function sanitize(text) {
+  if (!text) return '';
+  return String(text).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+}
+
+function extractFileName(input) {
+  const sanitized = sanitize(input);
+  if (!sanitized) return '';
+  let candidate = sanitized;
+  try {
+    const url = new URL(sanitized);
+    if (url.pathname && url.pathname !== '/') {
+      candidate = url.pathname;
+    } else if (url.hostname) {
+      candidate = url.hostname;
+    }
+  } catch (error) {
+    // Not a URL, keep the sanitized value
+  }
+  const segments = candidate.split(/[\\\/]/).filter(Boolean);
+  const baseName = segments.length ? segments[segments.length - 1] : candidate;
+  return sanitize(baseName) || sanitized;
+}
+
 function normalizedName(name) {
-  return sanitize(name).toLowerCase();
+  return extractFileName(name).toLowerCase();
 }
 
 async function getSettings() {
@@ -31,24 +55,59 @@ async function setSettings(settings) {
   });
 }
 
+function normalizeRecord(record) {
+  if (!record || typeof record !== 'object') return record;
+  const normalizedFileName = extractFileName(record.fileName || '');
+  if (normalizedFileName && normalizedFileName !== record.fileName) {
+    return { ...record, fileName: normalizedFileName };
+  }
+  return record;
+}
+
 async function getRecords() {
   const stored = await chrome.storage.local.get(STORAGE_KEYS.records);
-  return stored[STORAGE_KEYS.records] || [];
+  const rawRecords = Array.isArray(stored[STORAGE_KEYS.records]) ? stored[STORAGE_KEYS.records] : [];
+  let changed = false;
+  const normalizedRecords = rawRecords.map(record => {
+    const normalized = normalizeRecord(record);
+    if (normalized !== record) {
+      changed = true;
+    }
+    return normalized;
+  });
+  if (changed) {
+    await saveRecords(normalizedRecords);
+    return normalizedRecords;
+  }
+  return rawRecords;
 }
 
 async function saveRecords(records) {
+  const normalizedList = Array.isArray(records) ? records.map(normalizeRecord) : [];
   await chrome.storage.local.set({
-    [STORAGE_KEYS.records]: records
+    [STORAGE_KEYS.records]: normalizedList
   });
-}
-
-function sanitize(text) {
-  if (!text) return '';
-  return text.replace(/[\u0000-\u001f\u007f]/g, '').trim();
 }
 
 function formatDate(date = new Date()) {
   return date.toISOString();
+}
+
+function deriveFileName(downloadItem) {
+  const candidates = [
+    downloadItem.filename,
+    downloadItem.suggestedFilename,
+    downloadItem.targetPath,
+    downloadItem.finalUrl,
+    downloadItem.url
+  ];
+  for (const value of candidates) {
+    const extracted = extractFileName(value);
+    if (extracted) {
+      return extracted;
+    }
+  }
+  return '未知文件';
 }
 
 function computeSize(item) {
@@ -169,7 +228,7 @@ async function handleDownloadCreated(downloadItem) {
   const settings = await getSettings();
   await cleanupOldRecords(settings);
   const records = await getRecords();
-  const fileName = sanitize(downloadItem.filename || downloadItem.finalUrl || downloadItem.url || '未知文件');
+  const fileName = deriveFileName(downloadItem);
   const downloadTime = formatDate(new Date());
   const sourceUrl = sanitize(downloadItem.finalUrl || downloadItem.referrer || downloadItem.url || '');
   const fileSize = computeSize(downloadItem);
@@ -256,7 +315,7 @@ async function handleDownloadChanged(delta) {
   const downloadId = delta.id;
   const updates = {};
   if (delta.filename && delta.filename.current) {
-    updates.fileName = sanitize(delta.filename.current);
+    updates.fileName = extractFileName(delta.filename.current);
   }
   if (delta.state && delta.state.current) {
     updates.status = delta.state.current;
@@ -350,7 +409,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let added = 0;
         for (const item of incoming) {
           if (!item || typeof item !== 'object') continue;
-          const name = sanitize(item.fileName || item['文件名'] || '');
+          const name = extractFileName(item.fileName || item['文件名'] || '');
           if (!name) continue;
           const normalizedImportName = normalizedName(name);
           if (existingNames.has(normalizedImportName)) continue;
@@ -368,12 +427,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           }
           if (regexDuplicate) continue;
-          const tolerance = 1024;
-          const sizeDuplicate = size > 0 && merged.some(record => {
-            const recordSize = Number(record.fileSize) || 0;
-            return Math.abs(recordSize - size) <= tolerance;
-          });
-          if (sizeDuplicate) continue;
           merged.push({
             id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
             fileName: name,

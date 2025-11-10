@@ -8,6 +8,7 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 * 🔍 弹出页提供搜索、过滤、排序及快速导出能力，可按偏好开关正则高亮与重复标识。
 * ⚙️ 设置页可管理正则规则、主题、通知开关、自动清理等高级选项，并支持导入结果提醒。
 * 📊 使用内置的轻量版 SheetJS 兼容层（`xlsx.min.js`）完成 Excel 导入与导出，导入时自动去重并汇报新增条目。
+* 🗂️ 文件名统一规范：自动提取文件基名，移除系统下载目录前缀，确保历史导入与实时监听的记录格式一致。
 
 ## 安装与使用
 1. 在 Chrome 地址栏输入 `chrome://extensions/`，打开开发者模式。
@@ -37,7 +38,8 @@ DownEcho/
 graph LR
   A[用户操作] -->|下载文件| B[Chrome Downloads API]
   B --> C[background.js]
-  C -->|存取| D[(chrome.storage.local)]
+  C -->|规范化文件名| N[FileName Helper]
+  N -->|存取| D[(chrome.storage.local)]
   C -->|通知/暂停/取消| E[Chrome Notifications API]
   C -->|消息| F[popup.js]
   C -->|消息| G[options.js]
@@ -51,6 +53,8 @@ graph LR
 ```mermaid
 graph TD
   DownloadEvent[下载事件] --> background{background.js}
+  background -->|调用| Filename[FileName Helper]
+  Filename -->|生成基名| background
   background -->|记录| Storage[(storage.local)]
   background -->|去重反馈/导入结果通知| Notification[chrome.notifications]
   Storage --> popupView[popup.js]
@@ -66,12 +70,15 @@ graph TD
 sequenceDiagram
   participant DL as chrome.downloads
   participant BG as background.js
+  participant FN as FileName Helper
   participant ST as storage.local
   participant POP as popup.js
   participant OPT as options.js
   participant XLSX as xlsx.min.js
 
   DL->>BG: onCreated/onChanged
+  BG->>FN: extractFileName/normalizedName
+  FN-->>BG: 基名/规范化结果
   BG->>ST: saveRecords/getRecords
   BG->>DL: pause/resume/cancel
   BG->>chrome.notifications: create/clear
@@ -94,7 +101,7 @@ graph TD
   P1 --> P3[导出记录为 Excel]
   U --> O1[打开设置页]
   O1 --> O2[管理正则规则/开关]
-  O1 --> O3[导入历史 Excel]
+  O1 --> O3[导入历史 Excel（自动规范文件名并合并）]
   O1 --> O4[清空记录/刷新预览]
 ```
 
