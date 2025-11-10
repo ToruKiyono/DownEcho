@@ -440,16 +440,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const sourceUrl = sanitize(item.sourceUrl || item['来源网址'] || '');
           const status = sanitize(item.status || item['状态'] || 'imported');
           const matchedRegex = evaluateRegex(name, settings.regexFilters);
-          let regexDuplicate = false;
-          if (matchedRegex) {
-            try {
-              const regex = new RegExp(matchedRegex);
-              regexDuplicate = merged.some(record => regex.test(record.fileName || ''));
-            } catch (error) {
-              console.warn('Failed to evaluate regex during import', matchedRegex, error);
-            }
-          }
-          if (regexDuplicate) continue;
           if (existingIndexByName.has(normalizedImportName)) {
             const index = existingIndexByName.get(normalizedImportName);
             const existing = merged[index];

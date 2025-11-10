@@ -11,6 +11,7 @@ const controls = {
   regexList: document.getElementById('regexList'),
   addRegex: document.getElementById('addRegex'),
   importInput: document.getElementById('importInput'),
+  triggerImport: document.getElementById('triggerImport'),
   exportRecords: document.getElementById('exportRecords'),
   refreshPreview: document.getElementById('refreshPreview'),
   clearRecords: document.getElementById('clearRecords'),
@@ -197,6 +198,10 @@ controls.regexList.addEventListener('click', event => {
 
 controls.addRegex.addEventListener('click', () => {
   addRegexRule().catch(handleError);
+});
+
+controls.triggerImport.addEventListener('click', () => {
+  controls.importInput.click();
 });
 
 controls.regexInput.addEventListener('keydown', event => {
