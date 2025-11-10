@@ -7,8 +7,8 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 * 🔁 多维度去重：按文件名、文件大小容差及命中过滤规则的相似名称均会提示，并记录详细原因。
 * 🔍 弹出页提供搜索、过滤、排序及快速导出能力，可按偏好开关正则高亮与重复标识。
 * ⚙️ 设置页可管理正则规则、主题、通知开关、自动清理等高级选项，并支持导入结果提醒。
-* 📊 使用内置的轻量版 SheetJS 兼容层（`xlsx.min.js`）完成 Excel 导入与导出，导入时自动去重并汇报新增条目。
-* 🗂️ 文件名统一规范：自动提取文件基名，移除系统下载目录前缀，确保历史导入与实时监听的记录格式一致。
+* 📊 使用内置的轻量版 SheetJS 兼容层（`xlsx.min.js`）完成 Excel 导入与导出，导入时自动去重、更新并汇报新增及变更条目。
+* 🗂️ 文件名统一规范：自动提取文件基名，移除系统下载目录前缀并解码 `%` 转义字符，确保历史导入与实时监听的记录格式一致。
 
 ## 安装与使用
 1. 在 Chrome 地址栏输入 `chrome://extensions/`，打开开发者模式。
@@ -59,7 +59,7 @@ graph TD
   background -->|去重反馈/导入结果通知| Notification[chrome.notifications]
   Storage --> popupView[popup.js]
   Storage --> optionsView[options.js]
-  optionsView -->|导入 Excel| background
+  optionsView -->|导入 Excel（新增/更新）| background
   popupView -->|导出 Excel| XLSX[xlsx.min.js]
   optionsView -->|导出 Excel| XLSX
   XLSX -->|生成文件| User[用户]
@@ -84,7 +84,7 @@ sequenceDiagram
   BG->>chrome.notifications: create/clear
   POP->>BG: GET_RECORDS/GET_SETTINGS
   POP->>XLSX: json_to_sheet, writeFile
-  OPT->>BG: SAVE_SETTINGS/IMPORT_RECORDS/CLEAR_RECORDS
+  OPT->>BG: SAVE_SETTINGS/IMPORT_RECORDS(合并新增/更新)/CLEAR_RECORDS
   OPT->>XLSX: read, json_to_sheet, writeFile
   BG->>ST: setSettings
 ```
@@ -104,6 +104,14 @@ graph TD
   O1 --> O3[导入历史 Excel（自动规范文件名并合并）]
   O1 --> O4[清空记录/刷新预览]
 ```
+
+## Excel 导入刷新指南
+1. 在弹出页或设置页导出当前下载记录，按需在 Excel 中新增或调整文件条目。
+2. 打开设置页，使用“导入记录”按钮选择修改后的 Excel 文件。
+3. 扩展会自动解析文件名、解码 `%20` 等 URL 转义符，并与现有记录比对：
+   * 若发现同名记录，则更新其大小、时间、来源与状态字段。
+   * 若文件名不存在，则追加为新记录。
+4. 导入完成后会弹出通知与提示，标明本次新增与更新的数量；刷新预览即可查看合并结果。
 
 ## 轻量版 SheetJS 说明
 项目自带的 `xlsx.min.js` 兼容常用 SheetJS API（`json_to_sheet`、`sheet_to_json`、`book_new`、`book_append_sheet`、`writeFile`、`read`）。

@@ -21,6 +21,21 @@ function sanitize(text) {
   return String(text).replace(/[\u0000-\u001f\u007f]/g, '').trim();
 }
 
+function decodeNameSegment(value) {
+  if (!value) return '';
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value.replace(/\+/g, ' '));
+  } catch (error) {
+    try {
+      decoded = decodeURI(value);
+    } catch (innerError) {
+      decoded = value;
+    }
+  }
+  return sanitize(decoded) || '';
+}
+
 function extractFileName(input) {
   const sanitized = sanitize(input);
   if (!sanitized) return '';
@@ -37,7 +52,8 @@ function extractFileName(input) {
   }
   const segments = candidate.split(/[\\\/]/).filter(Boolean);
   const baseName = segments.length ? segments[segments.length - 1] : candidate;
-  return sanitize(baseName) || sanitized;
+  const decoded = decodeNameSegment(baseName);
+  return decoded || sanitize(baseName) || sanitized;
 }
 
 function normalizedName(name) {
@@ -404,18 +420,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'IMPORT_RECORDS': {
       const incoming = Array.isArray(message.records) ? message.records : [];
       Promise.all([getRecords(), getSettings()]).then(async ([records, settings]) => {
-        const existingNames = new Set(records.map(record => normalizedName(record.fileName || '')));
         const merged = [...records];
+        const existingIndexByName = new Map();
+        records.forEach((record, index) => {
+          const key = normalizedName(record.fileName || '');
+          if (key) {
+            existingIndexByName.set(key, index);
+          }
+        });
         let added = 0;
+        let updated = 0;
         for (const item of incoming) {
           if (!item || typeof item !== 'object') continue;
           const name = extractFileName(item.fileName || item['文件名'] || '');
           if (!name) continue;
           const normalizedImportName = normalizedName(name);
-          if (existingNames.has(normalizedImportName)) continue;
           const size = Number(item.fileSize || item['文件大小'] || 0) || 0;
           const time = sanitize(item.downloadTime || item['下载时间'] || formatDate());
           const sourceUrl = sanitize(item.sourceUrl || item['来源网址'] || '');
+          const status = sanitize(item.status || item['状态'] || 'imported');
           const matchedRegex = evaluateRegex(name, settings.regexFilters);
           let regexDuplicate = false;
           if (matchedRegex) {
@@ -427,27 +450,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           }
           if (regexDuplicate) continue;
-          merged.push({
+          if (existingIndexByName.has(normalizedImportName)) {
+            const index = existingIndexByName.get(normalizedImportName);
+            const existing = merged[index];
+            const updatedRecord = {
+              ...existing,
+              fileName: name,
+              fileSize: size || existing.fileSize || 0,
+              downloadTime: time || existing.downloadTime || formatDate(),
+              sourceUrl: sourceUrl || existing.sourceUrl || '',
+              status: status || existing.status || 'imported',
+              matchedRegex: matchedRegex || existing.matchedRegex,
+              duplicateReason: existing.duplicateReason
+            };
+            if (JSON.stringify(existing) !== JSON.stringify(updatedRecord)) {
+              merged[index] = updatedRecord;
+              updated += 1;
+            }
+            continue;
+          }
+          const newRecord = {
             id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
             fileName: name,
             fileSize: size,
             downloadTime: time,
             sourceUrl,
-            status: 'imported',
+            status: status || 'imported',
             duplicate: false,
             matchedRegex: matchedRegex || undefined,
             duplicateReason: undefined
-          });
-          existingNames.add(normalizedImportName);
+          };
+          merged.push(newRecord);
+          existingIndexByName.set(normalizedImportName, merged.length - 1);
           added += 1;
         }
         await saveRecords(merged);
-        if (added > 0) {
-          await showSimpleNotification(settings, '导入完成', `成功导入 ${added} 条记录`);
-        } else {
-          await showSimpleNotification(settings, '导入完成', '没有新的记录需要导入');
+        let message = '没有新的记录需要导入';
+        if (added > 0 && updated > 0) {
+          message = `新增 ${added} 条，更新 ${updated} 条记录`;
+        } else if (added > 0) {
+          message = `成功导入 ${added} 条新记录`;
+        } else if (updated > 0) {
+          message = `更新 ${updated} 条已存在记录`;
         }
-        respond({ ok: true, records: merged, added });
+        await showSimpleNotification(settings, '导入完成', message);
+        respond({ ok: true, records: merged, added, updated });
       }).catch(async error => {
         const settings = await getSettings();
         await showSimpleNotification(settings, '导入失败', error?.message || '导入失败');

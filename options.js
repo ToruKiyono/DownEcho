@@ -220,7 +220,16 @@ controls.importInput.addEventListener('change', async (event) => {
     recordsCache = response.records;
     renderPreview();
     const added = Number(response.added) || 0;
-    alert(added > 0 ? `导入完成，新增加 ${added} 条记录` : '导入完成，没有新的记录');
+    const updated = Number(response.updated) || 0;
+    if (added > 0 && updated > 0) {
+      alert(`导入完成，新增 ${added} 条并更新 ${updated} 条记录`);
+    } else if (added > 0) {
+      alert(`导入完成，新增 ${added} 条记录`);
+    } else if (updated > 0) {
+      alert(`导入完成，更新 ${updated} 条记录`);
+    } else {
+      alert('导入完成，没有新的记录');
+    }
   } catch (error) {
     console.error(error);
     alert(`导入失败：${error.message}`);
