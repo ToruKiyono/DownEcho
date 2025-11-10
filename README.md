@@ -4,7 +4,7 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 
 ## 功能亮点
 * 📥 实时监听下载任务，持久化存储文件名、大小、时间与来源。
-* 🔁 多维度去重：按文件名、文件大小容差及命中过滤规则的相似名称均会提示，并记录详细原因。
+* 🔁 多维度去重：按文件名、文件大小容差及命中过滤规则匹配的记录会先被暂停并提示是否继续，并记录详细原因。
 * 🔍 弹出页提供搜索、过滤、排序、导出及“一键导入 Excel”的入口，可按偏好开关正则高亮与重复标识。
 * ⚙️ 设置页可管理正则规则、主题、通知开关、自动清理等高级选项，并提供醒目的“导入 Excel”按钮与导入结果提醒。
 * 📊 使用内置的轻量版 SheetJS 兼容层（`xlsx.min.js`）完成 Excel 导入与导出，导入时自动去重、更新并汇报新增及变更条目。
@@ -14,7 +14,7 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 ## 安装与使用
 1. 在 Chrome 地址栏输入 `chrome://extensions/`，打开开发者模式。
 2. 点击“加载已解压的扩展程序”，选择本项目目录 `DownEcho`。
-3. 下载文件时，DownEcho 将自动记录并检测重复；命中规则时会弹出通知以供处理。
+3. 下载文件时，DownEcho 会自动记录并检测重复；一旦命中重复或过滤规则会立即暂停下载并弹出通知，等待用户选择继续或取消。
 4. 点击扩展图标打开弹出页查看或导出记录；通过“扩展选项”进入设置页进行更精细的配置。
 
 ## 目录结构
@@ -41,7 +41,10 @@ graph LR
   B --> C[background.js]
   C -->|规范化文件名| N[FileName Helper]
   N -->|存取| D[(chrome.storage.local)]
-  C -->|通知/暂停/取消| E[Chrome Notifications API]
+  C -->|登记待确认| Q[Pending Decisions Map]
+  C -->|暂停并通知| E[Chrome Notifications API]
+  Q -->|按钮交互| C
+  E -->|按钮事件| C
   C -->|消息| F[popup.js]
   C -->|消息| G[options.js]
   F -->|导入/导出/展示| H[popup.html]
@@ -60,6 +63,9 @@ graph TD
   background -->|调用| Filename[FileName Helper]
   Filename -->|生成基名| background
   background -->|记录| Storage[(storage.local)]
+  background -->|命中规则→暂停| DecisionQueue[待确认队列]
+  DecisionQueue -->|按钮选择| background
+  background -->|恢复/取消| Downloads[chrome.downloads]
   background -->|去重反馈/导入结果通知| Notification[chrome.notifications]
   Storage --> popupView[popup.js]
   Storage --> optionsView[options.js]
@@ -77,6 +83,8 @@ sequenceDiagram
   participant BG as background.js
   participant FN as FileName Helper
   participant ST as storage.local
+  participant NOTIF as chrome.notifications
+  participant USER as 用户
   participant POP as popup.js
   participant OPT as options.js
   participant XLSX as xlsx.min.js
@@ -85,8 +93,12 @@ sequenceDiagram
   BG->>FN: extractFileName/normalizedName
   FN-->>BG: 基名/规范化结果
   BG->>ST: saveRecords/getRecords
-  BG->>DL: pause/resume/cancel
-  BG->>chrome.notifications: create/clear
+  BG->>DL: pause (待决策)
+  BG->>NOTIF: create decision notification
+  NOTIF-->>USER: 展示继续/取消按钮
+  USER-->>BG: 选择继续或取消
+  BG->>DL: resume/cancel
+  BG->>NOTIF: clear notification
   POP->>BG: GET_RECORDS/GET_SETTINGS
   POP->>BG: IMPORT_RECORDS(弹出页导入)
   POP->>XLSX: read, json_to_sheet, writeFile
@@ -99,9 +111,9 @@ sequenceDiagram
 ```mermaid
 graph TD
   U[用户] --> U1[触发下载]
-  U1 --> U2[收到重复或命中通知]
-  U2 -->|继续| U3[下载继续执行]
-  U2 -->|取消| U4[下载被取消]
+  U1 --> U2[下载被暂停并收到通知]
+  U2 -->|继续| U3[点击通知后恢复下载]
+  U2 -->|取消| U4[点击通知后取消下载]
   U --> P1[打开弹出页查看记录]
   P1 --> P2[搜索/筛选/排序]
   P1 --> P3[导出记录为 Excel]
@@ -128,7 +140,7 @@ graph TD
 - 若遇到复杂格式或外部生成的特殊 XLSX，建议先转换为纯文本后导入。
 
 ## 测试建议
-1. **重复检测**：尝试多次下载同名文件、大小相近文件，确认通知与暂停逻辑正确。
+1. **重复检测**：尝试多次下载同名或大小相近的文件，确认下载被暂停、通知弹出且弹出页状态显示“等待确认”。
 2. **正则匹配**：在设置页添加规则，下载命中文件，观察通知与记录标识。
 3. **导入导出**：导出 Excel，再导入验证数据一致且无重复；导入第三方 Excel 时，确认能正确过滤重复项。
 4. **通知交互**：在通知中点击“取消下载”，确认下载被终止且记录状态更新。

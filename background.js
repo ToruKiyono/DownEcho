@@ -220,9 +220,11 @@ async function sendDecisionNotification({
   reason,
   matchedRegex,
   settings,
-  message
+  message,
+  recordId,
+  force = false
 }) {
-  if (!settings.notificationsEnabled) return null;
+  if (!force && !settings.notificationsEnabled) return null;
   const notificationId = createNotificationId(download.id, reason);
   const buttons = [
     { title: '继续下载' },
@@ -245,7 +247,8 @@ async function sendDecisionNotification({
   pendingDecisions.set(notificationId, {
     downloadId: download.id,
     reason,
-    matchedRegex
+    matchedRegex,
+    recordId: recordId ? String(recordId) : String(download.id)
   });
   return notificationId;
 }
@@ -274,9 +277,11 @@ async function updateRecord(recordId, updates) {
 }
 
 async function handleDownloadCreated(downloadItem) {
-  const settings = await getSettings();
-  await cleanupOldRecords(settings);
-  const records = await getRecords();
+  const [settings, records] = await Promise.all([
+    getSettings(),
+    getRecords()
+  ]);
+  cleanupOldRecords(settings).catch(error => console.warn('Cleanup failed', error));
   const fileName = deriveFileName(downloadItem);
   const downloadTime = formatDate(new Date());
   const sourceUrl = sanitize(downloadItem.finalUrl || downloadItem.referrer || downloadItem.url || '');
@@ -284,79 +289,100 @@ async function handleDownloadCreated(downloadItem) {
 
   const duplicateReasons = [];
   const normalized = normalizedName(fileName);
-  const existingByName = records.find(record => normalizedName(record.fileName || '') === normalized);
-  if (existingByName) {
-    duplicateReasons.push('相同文件名');
-  }
+  if (settings.duplicateDetection) {
+    const existingByName = records.find(record => normalizedName(record.fileName || '') === normalized);
+    if (existingByName) {
+      duplicateReasons.push('相同文件名');
+    }
 
-  const tolerance = 1024;
-  const targetSize = fileSize;
-  if (targetSize > 0) {
-    const similar = records.find(record => {
-      const size = Number(record.fileSize) || 0;
-      return Math.abs(size - targetSize) <= tolerance;
-    });
-    if (similar) {
-      duplicateReasons.push('相近文件大小');
+    const tolerance = 1024;
+    const targetSize = fileSize;
+    if (targetSize > 0) {
+      const similar = records.find(record => {
+        const size = Number(record.fileSize) || 0;
+        return Math.abs(size - targetSize) <= tolerance;
+      });
+      if (similar) {
+        duplicateReasons.push('相近文件大小');
+      }
     }
   }
 
   const matchedRegex = evaluateRegex(fileName, settings.regexFilters);
-  if (matchedRegex) {
+  const regexReason = matchedRegex && settings.regexPromptEnabled
+    ? `命中过滤规则：${matchedRegex}`
+    : null;
+
+  const duplicate = duplicateReasons.length > 0 && settings.duplicateDetection;
+  const regexFlagged = Boolean(regexReason);
+  const requiresDecision = duplicate || regexFlagged;
+
+  let pausedForDecision = false;
+  if (requiresDecision) {
     try {
-      const regex = new RegExp(matchedRegex);
-      const regexDuplicate = records.some(record => regex.test(record.fileName || ''));
-      if (regexDuplicate) {
-        duplicateReasons.push(`命中过滤规则：${matchedRegex}`);
-      }
+      await chrome.downloads.pause(downloadItem.id);
+      pausedForDecision = true;
     } catch (error) {
-      console.warn('Failed to evaluate regex duplicate', matchedRegex, error);
+      console.warn('Pause download for decision failed', error);
     }
   }
 
-  const duplicate = duplicateReasons.length > 0;
+  const reasonNotes = [];
+  if (duplicateReasons.length) {
+    reasonNotes.push(duplicateReasons.join('；'));
+  }
+  if (regexReason) {
+    reasonNotes.push(regexReason);
+  }
+
   const record = {
     id: String(downloadItem.id),
     fileName,
     fileSize,
     downloadTime,
     sourceUrl,
-    status: downloadItem.state || 'in_progress',
+    status: pausedForDecision ? 'awaiting_user_confirmation' : (downloadItem.state || 'in_progress'),
     duplicate,
     matchedRegex: matchedRegex || undefined,
-    duplicateReason: duplicate ? duplicateReasons.join('；') : undefined
+    duplicateReason: requiresDecision ? (reasonNotes.join('；') || undefined) : undefined
   };
 
   records.push(record);
   await saveRecords(records);
 
-  const messages = [];
-  let reason = '';
-  if (settings.duplicateDetection && duplicate) {
-    messages.push(`下载的文件可能重复：${duplicateReasons.join('；')}`);
-    reason = 'duplicate';
-  }
-
-  if (matchedRegex && settings.regexPromptEnabled) {
-    messages.push(`文件名命中过滤规则：${matchedRegex}`);
-    reason = 'regex';
-  }
-
-  const shouldPrompt = messages.length > 0 && settings.notificationsEnabled;
-
-  if (shouldPrompt) {
-    try {
-      await chrome.downloads.pause(downloadItem.id);
-    } catch (error) {
-      console.warn('Pause download failed', error);
+  if (requiresDecision) {
+    const messages = [];
+    if (duplicate) {
+      const reasonText = duplicateReasons.length ? duplicateReasons.join('；') : '检测到重复下载';
+      messages.push(`下载的文件可能重复：${reasonText}`);
     }
-    await sendDecisionNotification({
-      download: downloadItem,
-      reason,
-      matchedRegex,
-      settings,
-      message: messages.join('\n')
-    });
+    if (regexFlagged) {
+      messages.push(regexReason || `文件名命中过滤规则：${matchedRegex}`);
+    }
+    const decisionReason = duplicate && regexFlagged ? 'duplicate_regex'
+      : duplicate ? 'duplicate'
+        : 'regex';
+    try {
+      await sendDecisionNotification({
+        download: downloadItem,
+        reason: decisionReason,
+        matchedRegex,
+        settings,
+        message: messages.join('\n'),
+        recordId: record.id,
+        force: true
+      });
+    } catch (error) {
+      console.error('Failed to deliver decision notification', error);
+      try {
+        await chrome.downloads.resume(downloadItem.id);
+      } catch (resumeError) {
+        console.warn('Resume download after notification failure failed', resumeError);
+      }
+      await updateRecord(record.id, {
+        status: downloadItem.state || 'in_progress'
+      });
+    }
   }
 }
 
@@ -397,7 +423,11 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
   const entry = pendingDecisions.get(notificationId);
   pendingDecisions.delete(notificationId);
   const downloadId = entry.downloadId;
+  const recordId = entry.recordId;
   if (buttonIndex === 0) {
+    if (recordId) {
+      await updateRecord(String(recordId), { status: 'in_progress' });
+    }
     try {
       await chrome.downloads.resume(downloadId);
     } catch (error) {
@@ -406,7 +436,9 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
   } else if (buttonIndex === 1) {
     try {
       await chrome.downloads.cancel(downloadId);
-      await updateRecord(String(downloadId), { status: 'canceled' });
+      if (recordId) {
+        await updateRecord(String(recordId), { status: 'canceled' });
+      }
     } catch (error) {
       console.warn('Cancel download failed', error);
     }
@@ -419,7 +451,21 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
 });
 
 chrome.notifications.onClosed.addListener(notificationId => {
+  if (!pendingDecisions.has(notificationId)) return;
+  const entry = pendingDecisions.get(notificationId);
   pendingDecisions.delete(notificationId);
+  const downloadId = entry.downloadId;
+  const recordId = entry.recordId;
+  (async () => {
+    try {
+      await chrome.downloads.cancel(downloadId);
+    } catch (error) {
+      console.warn('Cancel download after notification closed failed', error);
+    }
+    if (recordId) {
+      await updateRecord(String(recordId), { status: 'canceled' });
+    }
+  })();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

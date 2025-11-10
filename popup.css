@@ -248,6 +248,11 @@ body.theme-rose .records-table tbody tr:hover {
   background: rgba(76, 175, 80, 0.18);
 }
 
+.status-pill--pending {
+  background: rgba(255, 193, 7, 0.2);
+  color: #8a5b00;
+}
+
 .status-pill--interrupted,
 .status-pill--canceled {
   background: rgba(244, 67, 54, 0.18);

@@ -207,14 +207,16 @@ function renderSource(url) {
 function renderStatus(status) {
   const value = status || 'in_progress';
   const cls = value === 'complete' ? 'status-pill status-pill--complete'
-    : (value === 'interrupted' || value === 'canceled') ? 'status-pill status-pill--interrupted'
-      : 'status-pill';
+    : value === 'awaiting_user_confirmation' ? 'status-pill status-pill--pending'
+      : (value === 'interrupted' || value === 'canceled') ? 'status-pill status-pill--interrupted'
+        : 'status-pill';
   const label = {
     complete: '已完成',
     interrupted: '已中断',
     canceled: '已取消',
     in_progress: '下载中',
-    imported: '已导入'
+    imported: '已导入',
+    awaiting_user_confirmation: '等待确认'
   }[value] || value;
   return `<span class="${cls}">${label}</span>`;
 }
