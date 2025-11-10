@@ -11,6 +11,7 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 * 🗂️ 文件名统一规范：自动提取文件基名，移除系统下载目录前缀并解码 `%` 转义字符，确保历史导入与实时监听的记录格式一致。
 * 🔔 通知系统自动回退到内置矢量图标，避免因缺失图像导致的“Unable to download all specified images”错误。
 * 📏 Excel 导出统一使用人类可读大小（如 `12.45 MB`），导入时自动解析回字节精度，与实时下载共享同一去重比较基准。
+* 🧾 Excel 导入具备容错能力：自动跳过空表与空行、识别常见表头，并兼容多工作表或第三方生成的记录文件。
 * 🌐 弹出页来源列自动换行并在三行后收起超长内容，既防止 URL 撑破布局，又可通过悬停提示查看完整链接。
 * 🧱 新下载会先被短暂暂停执行重复/规则检测，仅当未命中风险时立即自动恢复，杜绝浏览器直接重命名后继续下载的情况。
 
@@ -54,11 +55,14 @@ graph LR
   C -->|消息| G[options.js]
   F -->|导入/导出/展示| H[popup.html]
   F -->|导入请求| C
+  F -->|解析 Excel| R[Workbook Parser]
   G -->|导入导出/设置| I[options.html]
+  G -->|解析 Excel| R
   H -->|使用| A
   I -->|使用| A
-  F -->|调用| X[xlsx.min.js]
-  G -->|调用| X
+  R -->|调用| X[xlsx.min.js]
+  R -->|结构化记录| F
+  R -->|结构化记录| G
   F -->|格式化大小| S
   G -->|格式化大小| S
   S -->|文本/数值| F
@@ -80,10 +84,12 @@ graph TD
   SizeHelper -->|返回字节数| background
   Storage --> popupView[popup.js]
   Storage --> optionsView[options.js]
-  popupView -->|导入 Excel（新增/更新）| background
-  optionsView -->|导入 Excel（新增/更新）| background
-  popupView -->|导入/导出 Excel| XLSX[xlsx.min.js]
-  optionsView -->|导入/导出 Excel| XLSX
+  popupView -->|解析工作簿/过滤空行| ExcelParser[Workbook Parser]
+  optionsView -->|解析工作簿/过滤空行| ExcelParser
+  ExcelParser -->|结构化记录→导入| background
+  ExcelParser -->|调用| XLSX[xlsx.min.js]
+  popupView -->|导出 Excel| XLSX
+  optionsView -->|导出 Excel| XLSX
   popupView -->|请求格式化大小| SizeHelper
   optionsView -->|请求格式化大小| SizeHelper
   SizeHelper -->|返回格式化文本| popupView
@@ -104,6 +110,7 @@ sequenceDiagram
   participant OPT as options.js
   participant XLSX as xlsx.min.js
   participant SIZE as Size Formatter
+  participant PAR as Workbook Parser
 
   DL->>BG: onCreated/onChanged
   BG->>DL: pause (预检测)
@@ -123,12 +130,17 @@ sequenceDiagram
   BG->>SIZE: parseFileSize/humanFileSize
   SIZE-->>BG: 字节或文本
   POP->>BG: GET_RECORDS/GET_SETTINGS
-  POP->>BG: IMPORT_RECORDS(弹出页导入)
   POP->>XLSX: read, json_to_sheet, writeFile
+  POP->>PAR: extractRowsFromWorkbook(跳过空表/空行)
+  PAR->>XLSX: sheet_to_json(header0/header1)
+  PAR-->>POP: 结构化记录数组
+  POP->>BG: IMPORT_RECORDS(弹出页导入)
   POP->>SIZE: humanFileSize
   SIZE-->>POP: 格式化文本
   OPT->>BG: SAVE_SETTINGS/IMPORT_RECORDS(合并新增/更新)/CLEAR_RECORDS
   OPT->>XLSX: read, json_to_sheet, writeFile
+  OPT->>PAR: extractRowsFromWorkbook(跳过空表/空行)
+  PAR-->>OPT: 结构化记录数组
   OPT->>SIZE: humanFileSize
   SIZE-->>OPT: 格式化文本
   BG->>ST: setSettings
@@ -144,13 +156,19 @@ graph TD
   U --> P1[打开弹出页查看记录]
   P1 --> P2[搜索/筛选/排序]
   P1 --> P3[导出记录为 Excel]
-  P1 --> P4[直接导入 Excel 并合并历史记录]
+  P1 --> P4[导入 Excel（跳过空表/空行）并合并历史记录]
   P1 --> P5[查看自动换行的来源链接]
   U --> O1[打开设置页]
   O1 --> O2[管理正则规则/开关]
-  O1 --> O3[导入历史 Excel（自动规范文件名与文件大小）]
+  O1 --> O3[导入历史 Excel（规范文件名/大小并忽略空数据）]
   O1 --> O4[清空记录/刷新预览]
 ```
+
+### Workbook Parser 容错策略
+* **空表跳过**：遍历所有工作表，自动忽略缺失 `!ref` 或仅包含表头的工作表，避免直接报错。
+* **空行过滤**：对 `sheet_to_json` 结果进行二次筛选，只有包含非空字段的行才会参与导入。
+* **表头回退**：若工作表缺少标准字段名，自动回退到 `header: 1` 模式重建键值映射，从中文/英文等常见列名中提取信息。
+* **多端共用**：弹出页与设置页共用同一解析策略，确保无论在哪导入都具备一致的容错体验。
 
 ## Excel 导入刷新指南
 1. 在弹出页或设置页导出当前下载记录，文件大小列会以 `XX.XX 单位` 的人类可读格式呈现，可直接修改该值或其他字段。
@@ -158,6 +176,7 @@ graph TD
 3. 扩展会自动解析文件名、解码 `%20` 等 URL 转义符，并与现有记录比对：
    * 若发现同名记录，则更新其大小（自动解析诸如 `1.50 GB` 的文本）、时间、来源与状态字段，即使命中了正则过滤规则也会同步刷新。
    * 若文件名不存在，则追加为新记录。
+   * 若 Excel 含有多个工作表或空白行，系统会自动跳过空表与全空行，仅保留真正包含数据的条目，避免出现“Excel 文件不包含可用数据”提示。
 4. 导入完成后会弹出通知与提示，标明本次新增与更新的数量；刷新预览即可查看合并结果。
 
 ## 轻量版 SheetJS 说明
@@ -165,7 +184,7 @@ graph TD
 
 - 写入：生成最小化的 XLSX 文件结构（Zip + OpenXML）。
 - 读取：支持解析由本插件导出的 Excel 以及包含 inlineStr/数值单元格的简单工作表。
-- 若遇到复杂格式或外部生成的特殊 XLSX，建议先转换为纯文本后导入。
+- 若遇到包含复杂公式、合并单元格或极端格式的 XLSX，可先在 Excel/表格软件中“另存为”标准工作簿再导入，以获得最佳兼容性。
 
 ## 测试建议
 1. **重复检测**：尝试多次下载同名或大小相近的文件，确认下载被暂停、通知弹出且弹出页状态显示“等待确认”。

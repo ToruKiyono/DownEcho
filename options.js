@@ -51,6 +51,48 @@ function humanFileSize(bytes) {
   return `${value.toFixed(2)} ${SIZE_UNITS[unitIndex]}`;
 }
 
+function extractRowsFromWorkbook(workbook) {
+  if (!workbook || typeof workbook !== 'object') {
+    return [];
+  }
+  const candidates = Array.isArray(workbook.SheetNames) && workbook.SheetNames.length
+    ? workbook.SheetNames
+    : Object.keys(workbook.Sheets || {});
+  for (const name of candidates) {
+    const sheet = workbook.Sheets?.[name];
+    if (!sheet) continue;
+
+    const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+    const populatedRows = jsonRows.filter(row => Object.values(row).some(value => String(value ?? '').trim() !== ''));
+    if (populatedRows.length) {
+      return populatedRows;
+    }
+
+    const matrix = XLSX.utils.sheet_to_json(sheet, { defval: '', header: 1, raw: false });
+    if (matrix.length > 1) {
+      const [headers, ...dataRows] = matrix;
+      const normalizedHeaders = headers.map(header => String(header || '').trim());
+      const remapped = dataRows
+        .map(row => {
+          const hasContent = row.some(cell => String(cell ?? '').trim() !== '');
+          if (!hasContent) return null;
+          const entry = {};
+          normalizedHeaders.forEach((header, index) => {
+            if (header) {
+              entry[header] = row[index];
+            }
+          });
+          return entry;
+        })
+        .filter(Boolean);
+      if (remapped.length) {
+        return remapped;
+      }
+    }
+  }
+  return [];
+}
+
 function applyTheme(theme) {
   const root = document.documentElement;
   root.dataset.theme = theme;
@@ -246,9 +288,10 @@ controls.importInput.addEventListener('change', async (event) => {
   try {
     const arrayBuffer = await file.arrayBuffer();
     const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const rows = extractRowsFromWorkbook(workbook);
+    if (!rows.length) {
+      throw new Error('Excel 文件不包含可用数据');
+    }
     const response = await chrome.runtime.sendMessage({ type: 'IMPORT_RECORDS', records: rows });
     if (!response?.ok) throw new Error(response?.error || '导入失败');
     recordsCache = response.records;
