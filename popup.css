@@ -193,6 +193,27 @@ body.theme-rose .btn--primary {
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
+.records-table td.source-cell {
+  width: 240px;
+  max-width: 240px;
+  vertical-align: top;
+}
+
+.source-link {
+  display: inline-block;
+  max-width: 100%;
+  color: inherit;
+  text-decoration: underline;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.source-link:hover,
+.source-link:focus {
+  text-decoration: none;
+}
+
 .records-table th {
   font-weight: 700;
   cursor: pointer;

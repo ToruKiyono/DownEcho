@@ -53,13 +53,38 @@ function normalize(value) {
   return String(value).toLowerCase();
 }
 
+const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+
+function humanFileSize(bytes) {
+  let value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) {
+    const text = String(bytes || '').trim().toLowerCase();
+    const match = text.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/);
+    if (match) {
+      value = parseFloat(match[1]);
+      const unit = match[2] || 'b';
+      const index = SIZE_UNITS.findIndex(item => item.toLowerCase() === unit);
+      if (index >= 0) {
+        value *= Math.pow(1024, index);
+      }
+    } else {
+      value = 0;
+    }
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    value = 0;
+  }
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(2)} ${SIZE_UNITS[unitIndex]}`;
+}
+
 function formatSize(bytes) {
   if (!bytes || Number(bytes) === 0) return '—';
-  const value = Number(bytes);
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
-  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  return humanFileSize(bytes);
 }
 
 function formatTime(value) {
@@ -191,7 +216,7 @@ function render() {
       </td>
       <td>${formatSize(record.fileSize)}</td>
       <td>${formatTime(record.downloadTime)}</td>
-      <td>${renderSource(record.sourceUrl)}</td>
+      <td class="source-cell">${renderSource(record.sourceUrl)}</td>
       <td>${renderStatus(record.status)}</td>
     `;
     dom.tableBody.appendChild(tr);
@@ -201,7 +226,7 @@ function render() {
 function renderSource(url) {
   if (!url) return '—';
   const safe = escapeHtml(url);
-  return `<a href="${safe}" target="_blank" rel="noreferrer noopener">${safe}</a>`;
+  return `<a class="source-link" href="${safe}" target="_blank" rel="noreferrer noopener" title="${safe}">${safe}</a>`;
 }
 
 function renderStatus(status) {
@@ -281,7 +306,7 @@ function handleSort(event) {
 function collectExportRows() {
   return state.filtered.map(record => ({
     '文件名': record.fileName,
-    '文件大小': record.fileSize,
+    '文件大小': humanFileSize(record.fileSize),
     '下载时间': record.downloadTime,
     '来源网址': record.sourceUrl || '',
     '状态': record.status || ''

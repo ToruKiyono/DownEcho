@@ -10,6 +10,8 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 * 📊 使用内置的轻量版 SheetJS 兼容层（`xlsx.min.js`）完成 Excel 导入与导出，导入时自动去重、更新并汇报新增及变更条目。
 * 🗂️ 文件名统一规范：自动提取文件基名，移除系统下载目录前缀并解码 `%` 转义字符，确保历史导入与实时监听的记录格式一致。
 * 🔔 通知系统自动回退到内置矢量图标，避免因缺失图像导致的“Unable to download all specified images”错误。
+* 📏 Excel 导出统一使用人类可读大小（如 `12.45 MB`），导入时自动解析回字节精度，与实时下载共享同一去重比较基准。
+* 🌐 弹出页来源列支持自动换行，避免超长 URL 撑破布局，同时保留完整链接悬停提示。
 
 ## 安装与使用
 1. 在 Chrome 地址栏输入 `chrome://extensions/`，打开开发者模式。
@@ -45,6 +47,7 @@ graph LR
   C -->|暂停并通知| E[Chrome Notifications API]
   Q -->|按钮交互| C
   E -->|按钮事件| C
+  C -->|字节↔格式化大小| S[Size Formatter]
   C -->|消息| F[popup.js]
   C -->|消息| G[options.js]
   F -->|导入/导出/展示| H[popup.html]
@@ -54,6 +57,10 @@ graph LR
   I -->|使用| A
   F -->|调用| X[xlsx.min.js]
   G -->|调用| X
+  F -->|格式化大小| S
+  G -->|格式化大小| S
+  S -->|文本/数值| F
+  S -->|文本/数值| G
 ```
 
 ### 数据流图
@@ -67,12 +74,18 @@ graph TD
   DecisionQueue -->|按钮选择| background
   background -->|恢复/取消| Downloads[chrome.downloads]
   background -->|去重反馈/导入结果通知| Notification[chrome.notifications]
+  background -->|解析导入大小| SizeHelper[Size Formatter]
+  SizeHelper -->|返回字节数| background
   Storage --> popupView[popup.js]
   Storage --> optionsView[options.js]
   popupView -->|导入 Excel（新增/更新）| background
   optionsView -->|导入 Excel（新增/更新）| background
   popupView -->|导入/导出 Excel| XLSX[xlsx.min.js]
   optionsView -->|导入/导出 Excel| XLSX
+  popupView -->|请求格式化大小| SizeHelper
+  optionsView -->|请求格式化大小| SizeHelper
+  SizeHelper -->|返回格式化文本| popupView
+  SizeHelper -->|返回格式化文本| optionsView
   XLSX -->|生成文件| User[用户]
 ```
 
@@ -88,6 +101,7 @@ sequenceDiagram
   participant POP as popup.js
   participant OPT as options.js
   participant XLSX as xlsx.min.js
+  participant SIZE as Size Formatter
 
   DL->>BG: onCreated/onChanged
   BG->>FN: extractFileName/normalizedName
@@ -99,11 +113,17 @@ sequenceDiagram
   USER-->>BG: 选择继续或取消
   BG->>DL: resume/cancel
   BG->>NOTIF: clear notification
+  BG->>SIZE: parseFileSize/humanFileSize
+  SIZE-->>BG: 字节或文本
   POP->>BG: GET_RECORDS/GET_SETTINGS
   POP->>BG: IMPORT_RECORDS(弹出页导入)
   POP->>XLSX: read, json_to_sheet, writeFile
+  POP->>SIZE: humanFileSize
+  SIZE-->>POP: 格式化文本
   OPT->>BG: SAVE_SETTINGS/IMPORT_RECORDS(合并新增/更新)/CLEAR_RECORDS
   OPT->>XLSX: read, json_to_sheet, writeFile
+  OPT->>SIZE: humanFileSize
+  SIZE-->>OPT: 格式化文本
   BG->>ST: setSettings
 ```
 
@@ -118,17 +138,18 @@ graph TD
   P1 --> P2[搜索/筛选/排序]
   P1 --> P3[导出记录为 Excel]
   P1 --> P4[直接导入 Excel 并合并历史记录]
+  P1 --> P5[查看自动换行的来源链接]
   U --> O1[打开设置页]
   O1 --> O2[管理正则规则/开关]
-  O1 --> O3[导入历史 Excel（自动规范文件名并合并）]
+  O1 --> O3[导入历史 Excel（自动规范文件名与文件大小）]
   O1 --> O4[清空记录/刷新预览]
 ```
 
 ## Excel 导入刷新指南
-1. 在弹出页或设置页导出当前下载记录，按需在 Excel 中新增或调整文件条目。
+1. 在弹出页或设置页导出当前下载记录，文件大小列会以 `XX.XX 单位` 的人类可读格式呈现，可直接修改该值或其他字段。
 2. 在弹出页点击“导入 Excel”按钮，或打开设置页使用同名按钮并选择修改后的 Excel 文件。
 3. 扩展会自动解析文件名、解码 `%20` 等 URL 转义符，并与现有记录比对：
-   * 若发现同名记录，则更新其大小、时间、来源与状态字段，即使命中了正则过滤规则也会同步刷新。
+   * 若发现同名记录，则更新其大小（自动解析诸如 `1.50 GB` 的文本）、时间、来源与状态字段，即使命中了正则过滤规则也会同步刷新。
    * 若文件名不存在，则追加为新记录。
 4. 导入完成后会弹出通知与提示，标明本次新增与更新的数量；刷新预览即可查看合并结果。
 

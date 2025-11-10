@@ -22,6 +22,35 @@ let settings = null;
 let regexFilters = [];
 let recordsCache = [];
 
+const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+
+function humanFileSize(bytes) {
+  let value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) {
+    const text = String(bytes || '').trim().toLowerCase();
+    const match = text.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/);
+    if (match) {
+      value = parseFloat(match[1]);
+      const unit = match[2] || 'b';
+      const index = SIZE_UNITS.findIndex(item => item.toLowerCase() === unit);
+      if (index >= 0) {
+        value *= Math.pow(1024, index);
+      }
+    } else {
+      value = 0;
+    }
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    value = 0;
+  }
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(2)} ${SIZE_UNITS[unitIndex]}`;
+}
+
 function applyTheme(theme) {
   const root = document.documentElement;
   root.dataset.theme = theme;
@@ -249,7 +278,7 @@ controls.exportRecords.addEventListener('click', async () => {
     if (!response?.ok) throw new Error(response?.error || '无法获取记录');
     const rows = response.records.map(record => ({
       '文件名': record.fileName,
-      '文件大小': record.fileSize,
+      '文件大小': humanFileSize(record.fileSize),
       '下载时间': record.downloadTime,
       '来源网址': record.sourceUrl || '',
       '状态': record.status || ''
@@ -315,7 +344,7 @@ function renderPreview() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(record.fileName || '')}</td>
-      <td>${record.fileSize || 0}</td>
+      <td>${escapeHtml(formatPreviewSize(record.fileSize))}</td>
       <td>${escapeHtml(record.downloadTime || '')}</td>
       <td>${escapeHtml(record.sourceUrl || '')}</td>
       <td>${escapeHtml(record.status || '')}</td>
@@ -325,6 +354,12 @@ function renderPreview() {
   table.appendChild(tbody);
   controls.preview.innerHTML = '';
   controls.preview.appendChild(table);
+}
+
+function formatPreviewSize(value) {
+  if (value == null || value === '') return '—';
+  const formatted = humanFileSize(value);
+  return formatted === '0.00 B' ? '—' : formatted;
 }
 
 function handleError(error) {

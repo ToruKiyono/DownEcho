@@ -166,6 +166,29 @@ function computeSize(item) {
   return 0;
 }
 
+const SIZE_UNITS = ['b', 'kb', 'mb', 'gb', 'tb', 'pb'];
+
+function parseFileSize(value) {
+  if (value == null) return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const text = sanitize(String(value).replace(/,/g, ''));
+  if (!text) return 0;
+  const normalized = text.toLowerCase();
+  const match = normalized.match(/^(\d+(?:\.\d+)?)\s*(b|kb|mb|gb|tb|pb)?$/);
+  if (match) {
+    const numeric = parseFloat(match[1]);
+    if (!Number.isFinite(numeric)) return 0;
+    const unit = match[2] || 'b';
+    const index = SIZE_UNITS.indexOf(unit);
+    const multiplier = index >= 0 ? Math.pow(1024, index) : 1;
+    return Math.round(numeric * multiplier);
+  }
+  const fallback = Number(normalized);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
 function evaluateRegex(fileName, filters) {
   if (!Array.isArray(filters)) return null;
   for (const rule of filters) {
@@ -514,7 +537,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const name = extractFileName(item.fileName || item['文件名'] || '');
           if (!name) continue;
           const normalizedImportName = normalizedName(name);
-          const size = Number(item.fileSize || item['文件大小'] || 0) || 0;
+          const size = parseFileSize(item.fileSize ?? item['文件大小']);
           const time = sanitize(item.downloadTime || item['下载时间'] || formatDate());
           const sourceUrl = sanitize(item.sourceUrl || item['来源网址'] || '');
           const status = sanitize(item.status || item['状态'] || 'imported');
