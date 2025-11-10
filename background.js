@@ -1,0 +1,473 @@
+const DEFAULT_SETTINGS = {
+  duplicateDetection: true,
+  notificationsEnabled: true,
+  regexFilters: [],
+  regexPromptEnabled: true,
+  autoCleanEnabled: true,
+  autoCleanDays: 30,
+  theme: 'sky',
+  highlightRegexHits: true
+};
+
+const STORAGE_KEYS = {
+  records: 'downloadRecords',
+  settings: 'downEchoSettings'
+};
+
+const pendingDecisions = new Map();
+
+function sanitize(text) {
+  if (!text) return '';
+  return String(text).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+}
+
+function extractFileName(input) {
+  const sanitized = sanitize(input);
+  if (!sanitized) return '';
+  let candidate = sanitized;
+  try {
+    const url = new URL(sanitized);
+    if (url.pathname && url.pathname !== '/') {
+      candidate = url.pathname;
+    } else if (url.hostname) {
+      candidate = url.hostname;
+    }
+  } catch (error) {
+    // Not a URL, keep the sanitized value
+  }
+  const segments = candidate.split(/[\\\/]/).filter(Boolean);
+  const baseName = segments.length ? segments[segments.length - 1] : candidate;
+  return sanitize(baseName) || sanitized;
+}
+
+function normalizedName(name) {
+  return extractFileName(name).toLowerCase();
+}
+
+async function getSettings() {
+  const stored = await chrome.storage.local.get(STORAGE_KEYS.settings);
+  return { ...DEFAULT_SETTINGS, ...(stored[STORAGE_KEYS.settings] || {}) };
+}
+
+async function setSettings(settings) {
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.settings]: settings
+  });
+}
+
+function normalizeRecord(record) {
+  if (!record || typeof record !== 'object') return record;
+  const normalizedFileName = extractFileName(record.fileName || '');
+  if (normalizedFileName && normalizedFileName !== record.fileName) {
+    return { ...record, fileName: normalizedFileName };
+  }
+  return record;
+}
+
+async function getRecords() {
+  const stored = await chrome.storage.local.get(STORAGE_KEYS.records);
+  const rawRecords = Array.isArray(stored[STORAGE_KEYS.records]) ? stored[STORAGE_KEYS.records] : [];
+  let changed = false;
+  const normalizedRecords = rawRecords.map(record => {
+    const normalized = normalizeRecord(record);
+    if (normalized !== record) {
+      changed = true;
+    }
+    return normalized;
+  });
+  if (changed) {
+    await saveRecords(normalizedRecords);
+    return normalizedRecords;
+  }
+  return rawRecords;
+}
+
+async function saveRecords(records) {
+  const normalizedList = Array.isArray(records) ? records.map(normalizeRecord) : [];
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.records]: normalizedList
+  });
+}
+
+function formatDate(date = new Date()) {
+  return date.toISOString();
+}
+
+function deriveFileName(downloadItem) {
+  const candidates = [
+    downloadItem.filename,
+    downloadItem.suggestedFilename,
+    downloadItem.targetPath,
+    downloadItem.finalUrl,
+    downloadItem.url
+  ];
+  for (const value of candidates) {
+    const extracted = extractFileName(value);
+    if (extracted) {
+      return extracted;
+    }
+  }
+  return '未知文件';
+}
+
+function computeSize(item) {
+  if (typeof item.fileSize === 'number') return item.fileSize;
+  if (typeof item.totalBytes === 'number' && item.totalBytes > 0) {
+    return item.totalBytes;
+  }
+  if (typeof item.bytesReceived === 'number') {
+    return item.bytesReceived;
+  }
+  return 0;
+}
+
+function evaluateRegex(fileName, filters) {
+  if (!Array.isArray(filters)) return null;
+  for (const rule of filters) {
+    if (typeof rule !== 'string' || !rule.trim()) continue;
+    try {
+      const regex = new RegExp(rule);
+      if (regex.test(fileName)) {
+        return rule;
+      }
+    } catch (error) {
+      console.warn('Invalid regex rule skipped', rule, error);
+    }
+  }
+  return null;
+}
+
+async function ensureDefaults() {
+  const settings = await getSettings();
+  await setSettings(settings);
+  const existing = await getRecords();
+  if (!Array.isArray(existing)) {
+    await saveRecords([]);
+  }
+}
+
+async function cleanupOldRecords(settings) {
+  if (!settings.autoCleanEnabled) return;
+  const records = await getRecords();
+  if (!records.length) return;
+  const now = Date.now();
+  const threshold = settings.autoCleanDays * 24 * 60 * 60 * 1000;
+  const filtered = records.filter(record => {
+    const time = new Date(record.downloadTime || 0).getTime();
+    if (!Number.isFinite(time)) return true;
+    return now - time <= threshold;
+  });
+  if (filtered.length !== records.length) {
+    await saveRecords(filtered);
+  }
+}
+
+function createNotificationId(downloadId, reason) {
+  return `downecho_${downloadId}_${reason}_${Date.now()}`;
+}
+
+function createInfoNotificationId() {
+  return `downecho_info_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function sendDecisionNotification({
+  download,
+  reason,
+  matchedRegex,
+  settings,
+  message
+}) {
+  if (!settings.notificationsEnabled) return null;
+  const notificationId = createNotificationId(download.id, reason);
+  const buttons = [
+    { title: '继续下载' },
+    { title: '取消下载' }
+  ];
+  const title = reason === 'regex'
+    ? '命中下载过滤规则'
+    : '检测到可能的重复下载';
+  const context = matchedRegex ? `规则：${matchedRegex}` : '';
+  await chrome.notifications.create(notificationId, {
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title,
+    message,
+    contextMessage: context,
+    buttons
+  });
+  pendingDecisions.set(notificationId, {
+    downloadId: download.id,
+    reason,
+    matchedRegex
+  });
+  return notificationId;
+}
+
+async function showSimpleNotification(settings, title, message) {
+  if (!settings.notificationsEnabled) return null;
+  const notificationId = createInfoNotificationId();
+  await chrome.notifications.create(notificationId, {
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title,
+    message
+  });
+  return notificationId;
+}
+
+async function updateRecord(recordId, updates) {
+  const records = await getRecords();
+  const index = records.findIndex(record => record.id === recordId);
+  if (index >= 0) {
+    records[index] = { ...records[index], ...updates };
+    await saveRecords(records);
+  }
+}
+
+async function handleDownloadCreated(downloadItem) {
+  const settings = await getSettings();
+  await cleanupOldRecords(settings);
+  const records = await getRecords();
+  const fileName = deriveFileName(downloadItem);
+  const downloadTime = formatDate(new Date());
+  const sourceUrl = sanitize(downloadItem.finalUrl || downloadItem.referrer || downloadItem.url || '');
+  const fileSize = computeSize(downloadItem);
+
+  const duplicateReasons = [];
+  const normalized = normalizedName(fileName);
+  const existingByName = records.find(record => normalizedName(record.fileName || '') === normalized);
+  if (existingByName) {
+    duplicateReasons.push('相同文件名');
+  }
+
+  const tolerance = 1024;
+  const targetSize = fileSize;
+  if (targetSize > 0) {
+    const similar = records.find(record => {
+      const size = Number(record.fileSize) || 0;
+      return Math.abs(size - targetSize) <= tolerance;
+    });
+    if (similar) {
+      duplicateReasons.push('相近文件大小');
+    }
+  }
+
+  const matchedRegex = evaluateRegex(fileName, settings.regexFilters);
+  if (matchedRegex) {
+    try {
+      const regex = new RegExp(matchedRegex);
+      const regexDuplicate = records.some(record => regex.test(record.fileName || ''));
+      if (regexDuplicate) {
+        duplicateReasons.push(`命中过滤规则：${matchedRegex}`);
+      }
+    } catch (error) {
+      console.warn('Failed to evaluate regex duplicate', matchedRegex, error);
+    }
+  }
+
+  const duplicate = duplicateReasons.length > 0;
+  const record = {
+    id: String(downloadItem.id),
+    fileName,
+    fileSize,
+    downloadTime,
+    sourceUrl,
+    status: downloadItem.state || 'in_progress',
+    duplicate,
+    matchedRegex: matchedRegex || undefined,
+    duplicateReason: duplicate ? duplicateReasons.join('；') : undefined
+  };
+
+  records.push(record);
+  await saveRecords(records);
+
+  const messages = [];
+  let reason = '';
+  if (settings.duplicateDetection && duplicate) {
+    messages.push(`下载的文件可能重复：${duplicateReasons.join('；')}`);
+    reason = 'duplicate';
+  }
+
+  if (matchedRegex && settings.regexPromptEnabled) {
+    messages.push(`文件名命中过滤规则：${matchedRegex}`);
+    reason = 'regex';
+  }
+
+  const shouldPrompt = messages.length > 0 && settings.notificationsEnabled;
+
+  if (shouldPrompt) {
+    try {
+      await chrome.downloads.pause(downloadItem.id);
+    } catch (error) {
+      console.warn('Pause download failed', error);
+    }
+    await sendDecisionNotification({
+      download: downloadItem,
+      reason,
+      matchedRegex,
+      settings,
+      message: messages.join('\n')
+    });
+  }
+}
+
+async function handleDownloadChanged(delta) {
+  const downloadId = delta.id;
+  const updates = {};
+  if (delta.filename && delta.filename.current) {
+    updates.fileName = extractFileName(delta.filename.current);
+  }
+  if (delta.state && delta.state.current) {
+    updates.status = delta.state.current;
+  }
+  if (delta.bytesReceived && typeof delta.bytesReceived.current === 'number') {
+    updates.fileSize = delta.bytesReceived.current;
+  }
+  if (delta.totalBytes && typeof delta.totalBytes.current === 'number') {
+    updates.fileSize = delta.totalBytes.current;
+  }
+  if (Object.keys(updates).length > 0) {
+    await updateRecord(String(downloadId), updates);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await ensureDefaults();
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  const settings = await getSettings();
+  await cleanupOldRecords(settings);
+});
+
+chrome.downloads.onCreated.addListener(handleDownloadCreated);
+chrome.downloads.onChanged.addListener(handleDownloadChanged);
+
+chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
+  if (!pendingDecisions.has(notificationId)) return;
+  const entry = pendingDecisions.get(notificationId);
+  pendingDecisions.delete(notificationId);
+  const downloadId = entry.downloadId;
+  if (buttonIndex === 0) {
+    try {
+      await chrome.downloads.resume(downloadId);
+    } catch (error) {
+      console.warn('Resume download failed', error);
+    }
+  } else if (buttonIndex === 1) {
+    try {
+      await chrome.downloads.cancel(downloadId);
+      await updateRecord(String(downloadId), { status: 'canceled' });
+    } catch (error) {
+      console.warn('Cancel download failed', error);
+    }
+  }
+  try {
+    await chrome.notifications.clear(notificationId);
+  } catch (error) {
+    console.warn('Failed to clear notification', error);
+  }
+});
+
+chrome.notifications.onClosed.addListener(notificationId => {
+  pendingDecisions.delete(notificationId);
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const respond = (data) => {
+    try {
+      sendResponse(data);
+    } catch (error) {
+      console.warn('Failed to send response', error);
+    }
+  };
+  if (!message || typeof message.type !== 'string') {
+    respond({ ok: false, error: 'Invalid message' });
+    return false;
+  }
+  switch (message.type) {
+    case 'GET_RECORDS':
+      getRecords().then(records => respond({ ok: true, records })).catch(error => respond({ ok: false, error: error?.message }));
+      return true;
+    case 'GET_SETTINGS':
+      getSettings().then(settings => respond({ ok: true, settings })).catch(error => respond({ ok: false, error: error?.message }));
+      return true;
+    case 'SAVE_SETTINGS':
+      getSettings().then(current => {
+        const merged = { ...current, ...(message.settings || {}) };
+        return setSettings(merged).then(() => respond({ ok: true, settings: merged }));
+      }).catch(error => respond({ ok: false, error: error?.message }));
+      return true;
+    case 'CLEAR_RECORDS':
+      saveRecords([]).then(() => respond({ ok: true })).catch(error => respond({ ok: false, error: error?.message }));
+      return true;
+    case 'IMPORT_RECORDS': {
+      const incoming = Array.isArray(message.records) ? message.records : [];
+      Promise.all([getRecords(), getSettings()]).then(async ([records, settings]) => {
+        const existingNames = new Set(records.map(record => normalizedName(record.fileName || '')));
+        const merged = [...records];
+        let added = 0;
+        for (const item of incoming) {
+          if (!item || typeof item !== 'object') continue;
+          const name = extractFileName(item.fileName || item['文件名'] || '');
+          if (!name) continue;
+          const normalizedImportName = normalizedName(name);
+          if (existingNames.has(normalizedImportName)) continue;
+          const size = Number(item.fileSize || item['文件大小'] || 0) || 0;
+          const time = sanitize(item.downloadTime || item['下载时间'] || formatDate());
+          const sourceUrl = sanitize(item.sourceUrl || item['来源网址'] || '');
+          const matchedRegex = evaluateRegex(name, settings.regexFilters);
+          let regexDuplicate = false;
+          if (matchedRegex) {
+            try {
+              const regex = new RegExp(matchedRegex);
+              regexDuplicate = merged.some(record => regex.test(record.fileName || ''));
+            } catch (error) {
+              console.warn('Failed to evaluate regex during import', matchedRegex, error);
+            }
+          }
+          if (regexDuplicate) continue;
+          merged.push({
+            id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+            fileName: name,
+            fileSize: size,
+            downloadTime: time,
+            sourceUrl,
+            status: 'imported',
+            duplicate: false,
+            matchedRegex: matchedRegex || undefined,
+            duplicateReason: undefined
+          });
+          existingNames.add(normalizedImportName);
+          added += 1;
+        }
+        await saveRecords(merged);
+        if (added > 0) {
+          await showSimpleNotification(settings, '导入完成', `成功导入 ${added} 条记录`);
+        } else {
+          await showSimpleNotification(settings, '导入完成', '没有新的记录需要导入');
+        }
+        respond({ ok: true, records: merged, added });
+      }).catch(async error => {
+        const settings = await getSettings();
+        await showSimpleNotification(settings, '导入失败', error?.message || '导入失败');
+        respond({ ok: false, error: error?.message });
+      });
+      return true;
+    }
+    case 'DELETE_RECORD':
+      if (!message.id) {
+        respond({ ok: false, error: 'Missing id' });
+        return false;
+      }
+      getRecords().then(async records => {
+        const filtered = records.filter(record => record.id !== message.id);
+        await saveRecords(filtered);
+        respond({ ok: true, records: filtered });
+      }).catch(error => respond({ ok: false, error: error?.message }));
+      return true;
+    default:
+      respond({ ok: false, error: 'Unknown message type' });
+      return false;
+  }
+});

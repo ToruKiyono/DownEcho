@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "DownEcho",
+  "description": "下载记录与去重助手，提供下载记录管理、重复检测、正则过滤与导入导出功能。",
+  "version": "1.0.0",
+  "permissions": [
+    "downloads",
+    "storage",
+    "notifications",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}
