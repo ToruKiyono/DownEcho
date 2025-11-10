@@ -300,6 +300,14 @@ async function updateRecord(recordId, updates) {
 }
 
 async function handleDownloadCreated(downloadItem) {
+  let pausedInitially = false;
+  try {
+    await chrome.downloads.pause(downloadItem.id);
+    pausedInitially = true;
+  } catch (error) {
+    console.warn('Initial pause attempt failed', error);
+  }
+
   const [settings, records] = await Promise.all([
     getSettings(),
     getRecords()
@@ -342,11 +350,20 @@ async function handleDownloadCreated(downloadItem) {
 
   let pausedForDecision = false;
   if (requiresDecision) {
+    if (!pausedInitially) {
+      try {
+        await chrome.downloads.pause(downloadItem.id);
+        pausedInitially = true;
+      } catch (error) {
+        console.warn('Pause download for decision failed', error);
+      }
+    }
+    pausedForDecision = pausedInitially;
+  } else if (pausedInitially) {
     try {
-      await chrome.downloads.pause(downloadItem.id);
-      pausedForDecision = true;
+      await chrome.downloads.resume(downloadItem.id);
     } catch (error) {
-      console.warn('Pause download for decision failed', error);
+      console.warn('Resume download after initial pause failed', error);
     }
   }
 

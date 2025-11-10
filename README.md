@@ -12,6 +12,7 @@ DownEcho 是一个基于 Chrome Extension Manifest V3 的下载记录管理插�
 * 🔔 通知系统自动回退到内置矢量图标，避免因缺失图像导致的“Unable to download all specified images”错误。
 * 📏 Excel 导出统一使用人类可读大小（如 `12.45 MB`），导入时自动解析回字节精度，与实时下载共享同一去重比较基准。
 * 🌐 弹出页来源列支持自动换行，避免超长 URL 撑破布局，同时保留完整链接悬停提示。
+* 🧱 新下载会先被短暂暂停执行重复/规则检测，仅当未命中风险时立即自动恢复，杜绝浏览器直接重命名后继续下载的情况。
 
 ## 安装与使用
 1. 在 Chrome 地址栏输入 `chrome://extensions/`，打开开发者模式。
@@ -44,6 +45,7 @@ graph LR
   C -->|规范化文件名| N[FileName Helper]
   N -->|存取| D[(chrome.storage.local)]
   C -->|登记待确认| Q[Pending Decisions Map]
+  C -->|预暂停/恢复| B
   C -->|暂停并通知| E[Chrome Notifications API]
   Q -->|按钮交互| C
   E -->|按钮事件| C
@@ -72,7 +74,7 @@ graph TD
   background -->|记录| Storage[(storage.local)]
   background -->|命中规则→暂停| DecisionQueue[待确认队列]
   DecisionQueue -->|按钮选择| background
-  background -->|恢复/取消| Downloads[chrome.downloads]
+  background -->|预暂停/恢复/取消| Downloads[chrome.downloads]
   background -->|去重反馈/导入结果通知| Notification[chrome.notifications]
   background -->|解析导入大小| SizeHelper[Size Formatter]
   SizeHelper -->|返回字节数| background
@@ -104,11 +106,16 @@ sequenceDiagram
   participant SIZE as Size Formatter
 
   DL->>BG: onCreated/onChanged
+  BG->>DL: pause (预检测)
   BG->>FN: extractFileName/normalizedName
   FN-->>BG: 基名/规范化结果
   BG->>ST: saveRecords/getRecords
-  BG->>DL: pause (待决策)
-  BG->>NOTIF: create decision notification
+  alt 命中规则或重复
+    BG->>DL: pause (等待用户确认)
+    BG->>NOTIF: create decision notification
+  else 未命中
+    BG->>DL: resume (继续下载)
+  end
   NOTIF-->>USER: 展示继续/取消按钮
   USER-->>BG: 选择继续或取消
   BG->>DL: resume/cancel
