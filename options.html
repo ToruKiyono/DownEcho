@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>DownEcho 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="page" id="optionsRoot">
+    <header class="page__header">
+      <h1>DownEcho 设置中心</h1>
+      <p class="subtitle">管理重复检测、通知提示、正则规则以及导入导出。</p>
+    </header>
+
+    <section class="card">
+      <h2>基础功能</h2>
+      <div class="switch-list">
+        <label class="switch">
+          <input type="checkbox" id="duplicateDetection" />
+          <span class="switch__slider"></span>
+          <span class="switch__label">开启重复检测</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="regexPrompt" />
+          <span class="switch__slider"></span>
+          <span class="switch__label">命中过滤规则时提示</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="notificationsEnabled" />
+          <span class="switch__slider"></span>
+          <span class="switch__label">启用桌面通知</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="highlightRegex" />
+          <span class="switch__slider"></span>
+          <span class="switch__label">在列表中高亮命中记录</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="autoCleanEnabled" />
+          <span class="switch__slider"></span>
+          <span class="switch__label">自动清理超过 <span id="autoCleanDaysLabel"></span> 天的记录</span>
+        </label>
+      </div>
+      <div class="inline-field">
+        <label for="autoCleanDays">自动清理天数</label>
+        <input type="number" id="autoCleanDays" min="1" max="365" />
+      </div>
+      <div class="inline-field">
+        <label for="themeSelect">界面主题</label>
+        <select id="themeSelect">
+          <option value="sky">天空蓝</option>
+          <option value="forest">草原绿</option>
+          <option value="rose">玫瑰粉</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card__header">
+        <h2>正则过滤规则</h2>
+        <div class="card__actions">
+          <input type="text" id="regexInput" placeholder="输入新的正则，例如 ^report_\\d+\\.pdf$" />
+          <button class="btn btn--primary" id="addRegex">添加规则</button>
+        </div>
+      </div>
+      <ul class="regex-list" id="regexList"></ul>
+    </section>
+
+    <section class="card">
+      <h2>数据导入导出</h2>
+      <div class="card__actions">
+        <button class="btn btn--secondary" id="triggerImport">导入 Excel</button>
+        <input type="file" id="importInput" accept=".xlsx" hidden />
+        <button class="btn btn--primary" id="exportRecords">导出 Excel</button>
+        <button class="btn" id="refreshPreview">刷新预览</button>
+        <button class="btn btn--danger" id="clearRecords">清空记录</button>
+      </div>
+      <div class="preview" id="preview"></div>
+    </section>
+  </main>
+  <script src="xlsx.min.js"></script>
+  <script src="options.js" type="module"></script>
+</body>
+</html>
